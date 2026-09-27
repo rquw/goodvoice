@@ -75,6 +75,7 @@ function createRoom() {
     deadline: 0,
     timer: null,
     history: [],
+    watch: null,
     prep: null,
     dir: null,
   };
@@ -121,6 +122,7 @@ function snapshot(room) {
     showIdx: room.showIdx,
     showOrder: room.showOrder,
     history: room.history,
+    watch: room.watch,
     prep: room.prep,
   };
 }
@@ -191,7 +193,11 @@ function advance(room, from) {
       break;
     case 'reveal':
       if (room.round < room.order.length - 1) startRound(room, room.round + 1);
-      else setPhase(room, 'final', 0);
+      else {
+        // give everyone a few seconds to pull the winning takes, then roll
+        room.watch = { playing: true, pos: 0, at: Date.now() + 4000 };
+        setPhase(room, 'final', 0);
+      }
       break;
   }
 }
@@ -334,6 +340,7 @@ function onMessage(ws, msg) {
       if (!isHost || !room.media || !room.clips.length) return;
       if (!['lobby', 'final'].includes(room.phase)) return;
       resetScores(room);
+      room.watch = null;
       // every clip once, in movie order
       room.order = room.clips.map((_, i) => i);
       startRound(room, 0);
@@ -348,6 +355,14 @@ function onMessage(ws, msg) {
       sync(room);
       maybeProgress(room);
       break;
+    case 'watch': {
+      if (room.phase !== 'final') return;
+      const pos = Math.max(0, Math.min(36000, +msg.pos || 0));
+      const playing = msg.action === 'play' ? true : msg.action === 'pause' ? false : !!(room.watch && room.watch.playing);
+      room.watch = { playing, pos, at: Date.now(), by: p.id };
+      sync(room);
+      break;
+    }
     case 'react':
       broadcast(room, { t: 'react', pid: p.id, e: clean(msg.e, 4) });
       break;

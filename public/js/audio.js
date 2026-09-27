@@ -179,16 +179,25 @@ export function heardCtxTime(perfNow) {
   return ac.currentTime - (ac.outputLatency || ac.baseLatency || 0) + (perfNow - performance.now()) / 1000;
 }
 
+// Frame-accurate when requestVideoFrameCallback runs; falls back to polling
+// currentTime when it doesn't (old browsers, throttled or hidden tabs).
 export function frameClock(video, cb) {
   let stop = false;
+  let last = 0;
   if (video.requestVideoFrameCallback) {
-    const loop = (now, meta) => { if (stop) return; cb(meta.expectedDisplayTime || now, meta.mediaTime); video.requestVideoFrameCallback(loop); };
+    const loop = (now, meta) => {
+      if (stop) return;
+      last = performance.now();
+      cb(meta.expectedDisplayTime || now, meta.mediaTime);
+      video.requestVideoFrameCallback(loop);
+    };
     video.requestVideoFrameCallback(loop);
-  } else {
-    const loop = () => { if (stop) return; cb(performance.now(), video.currentTime); requestAnimationFrame(loop); };
-    requestAnimationFrame(loop);
   }
-  return () => { stop = true; };
+  const iv = setInterval(() => {
+    if (stop || video.paused || performance.now() - last < 250) return;
+    cb(performance.now(), video.currentTime);
+  }, 40);
+  return () => { stop = true; clearInterval(iv); };
 }
 
 export async function listMics() {

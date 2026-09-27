@@ -35,7 +35,7 @@ export class Stage {
 
   setBadge(text, color) {
     this.badge.textContent = text || '';
-    this.badge.style.display = text ? '' : 'none';
+    this.badge.style.display = text ? 'block' : 'none';
     if (color) this.badge.style.setProperty('--c', color);
   }
 

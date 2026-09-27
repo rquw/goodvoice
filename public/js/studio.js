@@ -89,10 +89,7 @@ export class Studio {
     const res = await detectCuts(this.src, { sensitivity: prefs.get('cutSens', 0.5), signal: sig, onProgress: p => this.setProgress('Finding the cuts', 0.12 + p * 0.78) });
     if (sig.aborted) return;
     const bounds = buildBoundaries(res.cuts, res.duration, this.spans, { minLen: 3, maxLen: 20 });
-    let clips = clipsFromBoundaries(bounds, res.duration, this.spans);
-    // clips nobody talks in are pointless to dub
-    const talky = clips.filter(c => c.on);
-    if (talky.length) clips = talky;
+    const clips = clipsFromBoundaries(bounds, res.duration, this.spans);
     this.clips = clips.map(c => ({ ...c, lines: [], thumb: '', stereo: this.audio ? this.audio.stereo : true }));
 
     this.setProgress('Grabbing thumbnails', 0.92);

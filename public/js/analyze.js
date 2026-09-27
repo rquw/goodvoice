@@ -285,15 +285,22 @@ export function buildBoundaries(cuts, duration, spans, { minLen = 3, maxLen = 22
   return out;
 }
 
+// Back-to-back clips covering the whole video, no gaps.
 export function clipsFromBoundaries(bounds, duration, spans) {
+  const pts = [...bounds.filter(b => b > 0 && b < duration), duration];
   const clips = [];
-  for (let i = 0; i < bounds.length; i++) {
-    const start = bounds[i] + (i ? 0.02 : 0);
-    const end = (i + 1 < bounds.length ? bounds[i + 1] : duration) - 0.03;
-    if (end - start < 0.8) continue;
-    let talk = 0;
-    for (const [a, b] of spans) talk += Math.max(0, Math.min(b, end) - Math.max(a, start));
-    clips.push({ start, end, talk, on: talk > 0.8 });
+  let start = 0;
+  for (const end of pts) {
+    if (end - start < 0.8 && clips.length) { clips[clips.length - 1].end = end; start = end; continue; }
+    if (end - start < 0.05) continue;
+    clips.push({ start, end });
+    start = end;
+  }
+  if (!clips.length) clips.push({ start: 0, end: duration });
+  for (const c of clips) {
+    c.talk = 0;
+    for (const [a, b] of spans) c.talk += Math.max(0, Math.min(b, c.end) - Math.max(a, c.start));
+    c.on = true;
   }
   return clips;
 }

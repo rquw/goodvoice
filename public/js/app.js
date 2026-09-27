@@ -5,6 +5,7 @@ import { Stage } from './stage.js';
 import { refEnvelope, takeEnvelope, scoreTake } from './score.js';
 import { encodeTake, decodeTake, opusOk } from './codec.js';
 import { renderReel } from './export.js';
+import { ReelPlayer, reelControls } from './reel.js';
 import { Net } from './net.js';
 import { MODELS } from './asr.js';
 import { sfx } from './sfx.js';
@@ -264,50 +265,50 @@ function soloPlay(clips, info, studio) {
     const done = clips.map((c, k) => ({ c, k, t: takes[k] })).filter(x => x.t);
     const avg = done.length ? Math.round(done.reduce((a, x) => a + x.t.score.total, 0) / done.length) : 0;
     const stars = done.reduce((a, x) => a + x.t.score.judgePts, 0);
+    const segs = done.map(x => ({ clip: x.c, voice: x.t.voice, name: me.name || 'You', color: '#ffd23f', removal }));
+    const st = new Stage();
+    let reel = null;
+    const main = h('div', { class: 'play-main' });
+    if (segs.length) {
+      reel = new ReelPlayer(st, segs, removal);
+      main.append(st.el, reelControls(reel, { onPlay: p => reel.play(p).catch(() => {}), onPause: p => reel.pause(p), onSeek: p => (reel.playing ? reel.play(p) : reel.pause(p)) }));
+    } else main.append(h('p', { class: 'fine center' }, 'You skipped everything. Bold.'));
     const el2 = h('section', { class: 'screen summary' },
-      h('div', { class: 'play-head' }, h('span'), h('div', { class: 'play-title' }, h('b', {}, 'Your reel')), h('span')),
-      h('div', { class: 'sum-top card' },
-        h('div', { class: 'big-stat' }, h('b', {}, avg + '%'), h('span', {}, 'average')),
-        h('div', { class: 'big-stat' }, h('b', {}, `${done.length}/${clips.length}`), h('span', {}, 'clips dubbed')),
-        h('div', { class: 'big-stat' }, h('b', {}, '★ ' + stars), h('span', {}, 'judge stars'))),
-      h('div', { class: 'sum-list' }, done.length ? done.map(x => h('div', { class: 'sum-row card' },
-        h('img', { src: x.c.thumb || '' }),
-        h('div', { class: 'grow' }, h('b', {}, `Clip ${x.k + 1}`), h('div', { class: 'fine' }, x.t.score.grade)),
-        h('div', { class: 'score-chip' }, x.t.score.total + '%'))) : h('p', { class: 'fine center' }, 'You skipped everything. Bold.')),
-      h('div', { class: 'final-btns' },
-        done.length ? h('button', { class: 'btn big primary', onclick: () => exportSolo(done) }, '⬇ Download the dub') : null,
-        h('button', { class: 'btn big', onclick: () => { stage.destroy(); soloPlay(clips, info, studio); } }, '↻ Again'),
-        h('button', { class: 'btn big ghost', onclick: () => { studio.destroy(); home(); } }, 'Home')));
-    show({ el: el2 }, 'is-summary');
-
-    async function exportSolo(list) {
-      await exportFlow({
-        src: info.src,
-        title: 'CHOICER VOICER',
-        subtitle: `starring ${me.name || 'you'}`,
-        segments: list.map(x => ({ clip: x.c, voice: x.t.voice, name: me.name || 'You', color: '#ffd23f', score: x.t.score.total, grade: x.t.score.grade, removal, caption: `Clip ${x.k + 1}` })),
-        name: 'choicer-voicer-dub',
-      });
-    }
+      h('div', { class: 'play-head' }, h('span'), h('div', { class: 'play-title' }, h('b', {}, 'Your dub')), h('span')),
+      h('div', { class: 'play-grid' },
+        main,
+        h('aside', { class: 'play-side' },
+          h('div', { class: 'sum-top card' },
+            h('div', { class: 'big-stat' }, h('b', {}, avg + '%'), h('span', {}, 'average')),
+            h('div', { class: 'big-stat' }, h('b', {}, `${done.length}/${clips.length}`), h('span', {}, 'dubbed')),
+            h('div', { class: 'big-stat' }, h('b', {}, '★ ' + stars), h('span', {}, 'stars'))),
+          h('div', { class: 'final-btns col' },
+            segs.length ? h('button', { class: 'btn big primary', onclick: () => { reel.pause(); exportFlow({ src: info.src, segments: segs, name: 'choicer-voicer-dub' }); } }, '⬇ Download') : null,
+            h('button', { class: 'btn big', onclick: () => soloPlay(clips, info, studio) }, '↻ Again'),
+            h('button', { class: 'btn big ghost', onclick: () => { studio.destroy(); home(); } }, 'Home')))));
+    show({ el: el2, destroy: () => { reel && reel.destroy(); st.destroy(); } }, 'is-summary');
+    if (reel) st.load(info.src).then(() => reel.play(0)).catch(e => { if (e.name === 'NotAllowedError') tapToContinue(() => reel.play(0)); });
   }
 
   go(0);
 }
 
-async function exportFlow({ src, segments, title, subtitle, name }) {
+async function exportFlow({ src, segments, name }) {
   const preview = h('div', { class: 'render-prev' });
   const bar = h('i');
-  const note = h('p', { class: 'fine' }, 'Rendering in real time on this device — keep this tab open and visible.');
+  const note = h('p', { class: 'fine' }, 'Rendering in real time on this device. Leave this tab open.');
   const ac = new AbortController();
   const m = modal('Rendering your dub', h('div', {}, preview, h('div', { class: 'bar' }, bar), note), { onClose: () => ac.abort(), wide: true });
   try {
-    await document.fonts.ready;
-    const blob = await renderReel({ src, segments, title, subtitle, preview, signal: ac.signal, onProgress: p => { bar.style.width = (p * 100).toFixed(1) + '%'; } });
+    const blob = await renderReel({
+      src, segments, preview, signal: ac.signal,
+      onProgress: p => { bar.style.width = (p * 100).toFixed(1) + '%'; },
+      onState: st => { note.textContent = st === 'hidden' ? 'Paused because the tab was hidden. It continues where it left off.' : 'Rendering in real time on this device. Leave this tab open.'; },
+    });
     const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
     download(blob, `${name}.${ext}`);
     note.textContent = `Done · ${fmtBytes(blob.size)} · saved as ${name}.${ext}`;
     bar.style.width = '100%';
-    sfx.fanfare();
     setTimeout(() => m.close(), 2500);
   } catch (e) {
     if (!ac.signal.aborted) { console.error(e); note.textContent = 'Render failed: ' + e.message; }
@@ -359,6 +360,7 @@ const party = {
   join(code) { this.reset(); this.boot().join(code, me.name, me.face); this.waiting(); },
   waiting() { show(h('section', { class: 'screen center-screen' }, h('div', { class: 'spinner' }), h('p', {}, 'Connecting…'))); },
   reset() {
+    this.dropReel && this.dropReel();
     this.room = null; this.clips = []; this.key = ''; this.local = null; this.takeCache = new Map(); this.myTakes = [];
     if (this.stage) this.stage.destroy();
     this.stage = null;
@@ -576,6 +578,7 @@ const party = {
         avatar(p, 'sm'), h('span', { class: 'pname' }, p.name), h('span', { class: 'st' }, st), h('b', {}, p.points));
     }));
     if (r.phase === 'vote') this.updateVote();
+    if (r.phase === 'final') this.syncWatch();
   },
 
   async enterPhase(phase) {
@@ -584,6 +587,7 @@ const party = {
     const key = this.key;
     const still = () => this.key === key;
     const clip = this.clip;
+    this.dropReel();
     stage.setBadge('');
     if (phase === 'final') return this.final();
     if (!clip) { this.panel.replaceChildren(h('p', {}, 'Waiting for clips…')); return; }
@@ -734,38 +738,91 @@ const party = {
       avatar(board[k], 'lg'), h('b', {}, board[k].name), h('span', {}, board[k].points + ' pts'), h('div', { class: 'block' }, k + 1)) : null));
     sfx.fanfare(); confetti();
     this.panel.replaceChildren(
-      h('div', { class: 'phase-card' }, h('h2', {}, board[0] ? `👑 ${board[0].name} wins!` : 'Game over')),
+      h('div', { class: 'phase-card' }, h('h2', {}, board[0] ? `👑 ${board[0].name} wins!` : 'Game over'), h('p', {}, 'The full dub is playing for everyone. Pause and seek are shared.')),
       podium,
       h('div', { class: 'final-list' }, board.map((p, k) => h('div', { class: 'srow card' },
         h('span', { class: 'rank' }, '#' + (k + 1)), avatar(p, 'sm'), h('b', { class: 'grow' }, p.name),
         h('span', { class: 'fine' }, `avg ${p.rounds ? Math.round(p.accSum / p.rounds) : 0}% · ★${p.judgePts} · 🗳${p.votesGot}`), h('b', {}, p.points)))),
       h('div', { class: 'final-btns' },
-        this.myTakes.length ? h('button', { class: 'btn big primary', onclick: () => this.exportMine() }, '⬇ My dubs') : null,
-        h('button', { class: 'btn big', onclick: () => this.exportBest() }, '⬇ Best-of reel'),
+        h('button', { class: 'btn big primary', onclick: () => this.exportBest() }, '⬇ Download'),
+        this.myTakes.length ? h('button', { class: 'btn big', onclick: () => this.exportMine() }, '⬇ Only my takes') : null,
         this.isHost ? h('button', { class: 'btn big hot', onclick: () => this.net.send({ t: 'start' }) }, '↻ Play again') : null,
         this.isHost ? h('button', { class: 'btn big ghost', onclick: () => this.net.send({ t: 'lobby' }) }, 'Lobby') : null));
+    this.buildReel();
+  },
+
+  // the movie with every clip's winning take, same on every screen
+  async reelSegments() {
+    const r = this.room;
+    const segs = [];
+    for (let k = 0; k < r.history.length; k++) {
+      const e = r.history[k];
+      const clip = this.clips[e.clip];
+      if (!clip) continue;
+      const top = e.takes[0];
+      let voice = null;
+      if (top) try { voice = await this.getTake(k, { pid: top.pid, url: top.url }); } catch {}
+      const p = top && this.player(top.pid);
+      segs.push({ clip, voice, name: top ? top.name : '', color: p ? p.color : '#ffd23f', removal: r.settings.removal });
+    }
+    return segs;
+  },
+
+  async buildReel() {
+    const key = this.key;
+    this.dropReel();
+    const holder = h('div', { class: 'reel-holder' }, h('div', { class: 'fine center' }, 'Loading the full dub…'));
+    this.stage.el.after(holder);
+    this.reelHolder = holder;
+    const segs = await this.reelSegments();
+    if (key !== this.key || !segs.length) { holder.textContent = segs.length ? '' : 'Nothing to play.'; return; }
+    const reel = new ReelPlayer(this.stage, segs, this.room.settings.removal);
+    this.reel = reel;
+    const send = (action, pos) => this.net.send({ t: 'watch', action, pos });
+    holder.replaceChildren(reelControls(reel, {
+      onPlay: p => { if (p >= reel.total - 0.05) p = 0; reel.play(p).catch(() => {}); send('play', p); },
+      onPause: p => { reel.pause(p); send('pause', p); },
+      onSeek: p => { reel.playing ? reel.play(p).catch(() => {}) : reel.pause(p); send('seek', p); },
+    }));
+    await reel.pause(0);
+    clearInterval(this.watchTimer);
+    this.watchTimer = setInterval(() => this.syncWatch(), 800);
+    this.syncWatch();
+  },
+
+  dropReel() {
+    clearInterval(this.watchTimer);
+    if (this.reel) { this.reel.destroy(); this.reel = null; }
+    if (this.reelHolder) { this.reelHolder.remove(); this.reelHolder = null; }
+    if (this.stage) this.stage.setBadge('');
+  },
+
+  syncWatch() {
+    const w = this.room && this.room.watch;
+    const reel = this.reel;
+    if (!w || !reel || reel.busy) return;
+    if (w.playing) {
+      const target = w.pos + (this.net.now() - w.at) / 1000;
+      if (target < 0) { if (reel.playing) reel.pause(w.pos); return; }
+      if (target >= reel.total) { if (reel.playing) reel.pause(reel.total); return; }
+      if (!reel.playing || Math.abs(reel.pos - target) > 0.4) {
+        reel.play(target + 0.1).catch(e => { if (e.name === 'NotAllowedError') tapToContinue(() => this.syncWatch()); });
+      }
+    } else if (reel.playing || Math.abs(reel.pos - w.pos) > 0.05) {
+      reel.pause(w.pos);
+    }
   },
 
   async exportMine() {
     const segs = this.myTakes.map(t => ({ clip: this.clips[t.clip], voice: t.voice, name: me.name, color: this.meP ? this.meP.color : '#ffd23f', score: t.score.total, grade: t.score.grade, removal: this.room.settings.removal, caption: `Round ${t.round + 1}` })).filter(s => s.clip);
-    await exportFlow({ src: this.mediaSrc, segments: segs, title: 'CHOICER VOICER', subtitle: `starring ${me.name}`, name: 'choicer-voicer-my-dubs' });
+    await exportFlow({ src: this.mediaSrc, segments: segs, name: 'choicer-voicer-my-takes' });
   },
 
   async exportBest() {
-    const r = this.room;
-    toast('Fetching the best takes…');
-    const segs = [];
-    for (let k = 0; k < r.history.length; k++) {
-      const e = r.history[k];
-      const top = e.takes[0];
-      if (!top || !this.clips[e.clip]) continue;
-      let voice = null;
-      try { voice = await this.getTake(k, { pid: top.pid, url: top.url }); } catch {}
-      const p = this.player(top.pid);
-      segs.push({ clip: this.clips[e.clip], voice, name: top.name, color: p ? p.color : '#ffd23f', score: top.total, grade: gradeOf(top.total), removal: r.settings.removal, caption: `Round ${k + 1} winner` });
-    }
-    if (!segs.length) return toast('No takes to render.', 'bad');
-    await exportFlow({ src: this.mediaSrc, segments: segs, title: 'BEST OF', subtitle: `room ${r.code}`, name: 'choicer-voicer-best-of' });
+    const segs = await this.reelSegments();
+    if (!segs.length) return toast('Nothing to render.', 'bad');
+    if (this.reel && this.reel.playing) { const p = this.reel.pos; this.reel.pause(p); this.net.send({ t: 'watch', action: 'pause', pos: p }); }
+    await exportFlow({ src: this.mediaSrc, segments: segs, name: 'choicer-voicer-dub' });
   },
 };
 

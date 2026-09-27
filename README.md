@@ -10,7 +10,8 @@ Solo works fully offline-ish in the browser. Party mode needs this little server
 
 - upload any movie clip (mp4, mov, webm, mkv). cuts are detected automatically
   and it goes straight into the game: every clip once, in order. record, then
-  redo or next, until the movie's done. clips with nobody talking get skipped
+  redo or next, until the movie's done. nothing gets skipped: the clips cover
+  the whole upload front to back
 - auto script: Whisper runs **in your browser** (transformers.js), no API key.
   first run downloads the model (~80 MB), then it's cached. it writes in the
   background while you're already playing
@@ -23,7 +24,10 @@ Solo works fully offline-ish in the browser. Party mode needs this little server
   hand out 0–5 stars
 - party mode: room codes, everyone records at the same time, takes get played
   back one by one, judges + audience vote, podium at the end
-- final videos render **on the device** (canvas + MediaRecorder, mp4 on
+- when it's done the full dub plays right away: the whole upload, front to back,
+  with the voices swapped. in party mode it's the same video on every screen
+  and play / pause / seek are shared (anyone can control it, everyone follows)
+- the download renders **on the device** (canvas + MediaRecorder, mp4 on
   Chrome/Edge/Safari, webm on Firefox). nothing gets uploaded for that
 
 ## run it locally
@@ -59,6 +63,8 @@ Free tier notes:
 - `MAX_UPLOAD_MB` (default 800) caps the host upload size
 - bandwidth: guests stream only the parts of the video they need (HTTP range
   requests), takes are ~50 KB opus each, rendering happens on each device
+- if the tab gets hidden during a render it pauses and resumes where it was,
+  instead of spitting out a frozen/silent file
 
 ## how party mode works
 
