@@ -9,9 +9,11 @@ Solo works fully offline-ish in the browser. Party mode needs this little server
 ## what it does
 
 - upload any movie clip (mp4, mov, webm, mkv). cuts are detected automatically
-  and grouped into dubbable clips. you can join/split them on the timeline
+  and it goes straight into the game: every clip once, in order. record, then
+  redo or next, until the movie's done. clips with nobody talking get skipped
 - auto script: Whisper runs **in your browser** (transformers.js), no API key.
-  first run downloads the model (~80 MB), then it's cached. every line is editable
+  first run downloads the model (~80 MB), then it's cached. it writes in the
+  background while you're already playing
 - voice removal without AI: film dialogue sits dead center in the stereo mix, so
   the center gets cancelled and music/effects on the sides stay. mono files get
   the speech band notched out instead. or just mute everything
@@ -64,7 +66,7 @@ Free tier notes:
 host uploads video ──► server stores it temporarily (/tmp)
 host's browser finds cuts + writes the script, sends clip list (tiny JSON)
 guests stream the video from the server with range requests
-every round:  loading → listen → record (everyone at once) → showtime → vote → results
+every clip:   loading → listen → record (everyone at once) → showtime → vote → results
 takes (opus, ~50 KB) go up to the server, everyone downloads them for showtime
 ```
 
@@ -80,7 +82,7 @@ The server is ~500 lines of plain Node + `ws`, no database.
 - `public/js/stage.js` player, karaoke, visualizer, countdown
 - `public/js/export.js` client-side video render
 - `public/js/codec.js` opus packing for takes (WebCodecs, wav fallback)
-- `public/js/studio.js` upload + clip editor
+- `public/js/studio.js` upload + analysis
 - `public/js/app.js` screens, solo + party flow
 
 ## tips

@@ -388,3 +388,7 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+.play > .progress { margin: -4px 0 14px; }
+.asr-note { text-align: center; min-height: 18px; }
+.play-main .meter { margin: 0 auto; width: 160px; }

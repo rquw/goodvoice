@@ -334,9 +334,8 @@ function onMessage(ws, msg) {
       if (!isHost || !room.media || !room.clips.length) return;
       if (!['lobby', 'final'].includes(room.phase)) return;
       resetScores(room);
-      const idx = room.clips.map((_, i) => i);
-      if (msg.shuffle !== false) idx.sort(() => Math.random() - 0.5);
-      room.order = idx.slice(0, room.settings.rounds);
+      // every clip once, in movie order
+      room.order = room.clips.map((_, i) => i);
       startRound(room, 0);
       break;
     }
