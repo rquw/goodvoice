@@ -135,7 +135,11 @@ export class Stage {
     clearTimeout(guard); clearInterval(wait);
     stopClock();
     this.video.removeEventListener('ended', onEnded);
-    if (my === this.token) this.video.pause();
+    if (my === this.token) {
+      this.video.pause();
+      // park on this clip's last frame, not the first frame of the next shot
+      if (this.video.currentTime > clip.end - 0.05) seekTo(this.video, Math.max(clip.start, clip.end - 0.07)).catch(() => {});
+    }
     if (this.voiceSrc) { const v = this.voiceSrc; setTimeout(() => { try { v.stop(); } catch {} }, 200); this.voiceSrc = null; }
     this.mode = 'idle';
     if (!opts.record) return my === this.token ? {} : null;
@@ -153,6 +157,7 @@ export class Stage {
 
   // ---- karaoke ----
   renderSubs(t, force) {
+    if (this.subsOff) { if (this.subs.firstChild) this.subs.replaceChildren(); return; }
     const clip = this.clip;
     const lines = clip && clip.lines || [];
     let idx = lines.findIndex(l => t < l.t1 + 0.25);

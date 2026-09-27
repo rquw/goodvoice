@@ -31,7 +31,16 @@ const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json',
   '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2',
+  '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.onnx': 'application/octet-stream',
+  '.txt': 'text/plain; charset=utf-8',
 };
+
+// speech runtime + models are served from node_modules, so nothing depends on
+// a CDN or Hugging Face being reachable
+const MOUNTS = [
+  ['/vendor/ort/', path.join(__dirname, 'node_modules/onnxruntime-web/dist')],
+  ['/models/Xenova/whisper-tiny/', path.join(__dirname, 'node_modules/sts-whisper-tiny/models/Xenova/whisper-tiny')],
+];
 const VIDEO_MIME = {
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska',
   ogv: 'video/ogg', avi: 'video/x-msvideo',
@@ -329,7 +338,7 @@ function onMessage(ws, msg) {
       room.clips = msg.clips.slice(0, 200).map(c => ({
         start: +c.start || 0, end: +c.end || 0, lines: Array.isArray(c.lines) ? c.lines : [],
         env: typeof c.env === 'string' ? c.env : '', thumb: typeof c.thumb === 'string' && c.thumb.length < 40000 ? c.thumb : '',
-        stereo: !!c.stereo,
+        stereo: !!c.stereo, dialogue: c.dialogue !== false,
       })).filter(c => c.end > c.start);
       room.clipsRev++;
       broadcast(room, { t: 'clips', clips: room.clips, rev: room.clipsRev });
@@ -341,8 +350,9 @@ function onMessage(ws, msg) {
       if (!['lobby', 'final'].includes(room.phase)) return;
       resetScores(room);
       room.watch = null;
-      // every clip once, in movie order
-      room.order = room.clips.map((_, i) => i);
+      // every clip with dialogue once, in movie order
+      room.order = room.clips.map((_, i) => i).filter(i => room.clips[i].dialogue);
+      if (!room.order.length) room.order = room.clips.map((_, i) => i);
       startRound(room, 0);
       break;
     }
@@ -516,16 +526,20 @@ function serveFile(req, res, file, mime, immutable) {
 
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
-  if (rel === '/' || !path.extname(rel)) rel = '/index.html';
-  const file = path.normalize(path.join(PUBLIC, rel));
-  if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
+  let root = PUBLIC, longCache = rel.startsWith('/vendor/');
+  for (const [prefix, dir] of MOUNTS) {
+    if (rel.startsWith(prefix)) { root = dir; rel = '/' + rel.slice(prefix.length); longCache = true; break; }
+  }
+  if (root === PUBLIC && (rel === '/' || !path.extname(rel))) rel = '/index.html';
+  const file = path.normalize(path.join(root, rel));
+  if (!file.startsWith(root)) { res.writeHead(403); return res.end(); }
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
     const ext = path.extname(file);
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Content-Length': st.size,
-      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+      'Cache-Control': ext === '.html' ? 'no-cache' : longCache ? 'public, max-age=604800' : 'public, max-age=300',
     });
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);

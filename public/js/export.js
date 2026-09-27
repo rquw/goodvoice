@@ -10,18 +10,6 @@ export function pickMime() {
   return opts.find(m => MediaRecorder.isTypeSupported(m)) || '';
 }
 
-function wrapWords(g, words, maxW) {
-  const rows = [[]];
-  let w = 0;
-  for (const word of words) {
-    const ww = g.measureText(word.w + ' ').width;
-    if (w + ww > maxW && rows[rows.length - 1].length) { rows.push([]); w = 0; }
-    rows[rows.length - 1].push({ ...word, width: ww });
-    w += ww;
-  }
-  return rows;
-}
-
 // Background tabs throttle setInterval to 1/s. Worker timers keep ticking.
 function workerTicker(ms, fn) {
   const url = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${ms});`], { type: 'text/javascript' }));
@@ -63,36 +51,12 @@ export async function renderReel({ src, segments, onProgress, onState, signal, p
   const g = canvas.getContext('2d');
 
   let seg = segments[0];
-  const fontSmall = Math.round(H * 0.04), fontSub = Math.round(H * 0.052);
+  const fontSmall = Math.round(H * 0.04);
 
   const paint = () => {
     g.fillStyle = '#000';
     g.fillRect(0, 0, W, H);
     g.drawImage(video, 0, 0, W, H);
-    const t = video.currentTime - seg.clip.start;
-    const lines = seg.clip.lines || [];
-    const cur = lines.find(l => t >= l.t0 - 0.3 && t < l.t1 + 0.25);
-    if (cur) {
-      g.font = `800 ${fontSub}px "Bricolage Grotesque", system-ui, sans-serif`;
-      const rows = wrapWords(g, cur.words, W * 0.84);
-      rows.forEach((row, ri) => {
-        const rw = row.reduce((a, b) => a + b.width, 0);
-        let x = (W - rw) / 2;
-        const y = H - fontSub * (rows.length - ri) - H * 0.05;
-        for (const word of row) {
-          const p = clamp((t - word.t0) / Math.max(0.05, word.t1 - word.t0));
-          g.textAlign = 'left';
-          g.lineWidth = fontSub * 0.18; g.strokeStyle = 'rgba(0,0,0,0.85)'; g.lineJoin = 'round';
-          g.strokeText(word.w, x, y);
-          g.fillStyle = '#ffffff'; g.fillText(word.w, x, y);
-          if (p > 0) {
-            g.save(); g.beginPath(); g.rect(x, y - fontSub, g.measureText(word.w).width * p, fontSub * 1.4); g.clip();
-            g.fillStyle = '#ffd23f'; g.fillText(word.w, x, y); g.restore();
-          }
-          x += word.width;
-        }
-      });
-    }
     if (seg.name) {
       const tag = `🎙 ${seg.name}`;
       g.font = `700 ${fontSmall}px "Bricolage Grotesque", system-ui, sans-serif`;

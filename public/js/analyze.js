@@ -99,20 +99,24 @@ export function smooth(env, r = 2) {
   return out;
 }
 
-export function clipEnvelope(vdb, start, end, lines) {
+// Reference shape for a clip: voice energy, but only where the voice detector
+// heard speech. Music, effects and noise stay flat.
+export function clipEnvelope(vdb, start, end, spans) {
   const a = Math.max(0, Math.floor(start * FPS)), b = Math.min(vdb.length, Math.ceil(end * FPS));
-  const env = normEnv(vdb.subarray(a, b));
-  if (lines && lines.length) {
-    for (let i = 0; i < env.length; i++) {
-      const t = i / FPS;
-      let inside = false;
-      for (const ln of lines) for (const w of ln.words) if (t >= w.t0 - 0.12 && t <= w.t1 + 0.12) { inside = true; break; }
-      if (!inside) env[i] *= 0.2;
-    }
-  }
+  const env = gateEnv(normEnv(vdb.subarray(a, b)), spans, start);
   const u8 = new Uint8Array(env.length);
   for (let i = 0; i < env.length; i++) u8[i] = Math.round(env[i] * 255);
   return u8ToB64(u8);
+}
+
+export function gateEnv(env, spans, offset = 0) {
+  const out = new Float32Array(env.length);
+  for (let i = 0; i < env.length; i++) {
+    const t = offset + i / FPS;
+    const inside = spans.some(([x, y]) => t >= x && t <= y);
+    out[i] = inside ? Math.max(env[i], 0.18) : 0;
+  }
+  return out;
 }
 
 // ---- cut detection ----
@@ -169,7 +173,7 @@ export async function detectCuts(src, { onProgress, sensitivity = 0.5, signal } 
     const samples = [];
     let prev = null;
     const hist = [];
-    const thr = 0.34 - sensitivity * 0.2;
+    const thr = 0.3 - sensitivity * 0.18;
 
     await seekTo(v, 0);
     v.playbackRate = isMobile ? 4 : 8;
@@ -180,7 +184,7 @@ export async function detectCuts(src, { onProgress, sensitivity = 0.5, signal } 
         if (prev) {
           const d = sigDiff(prev.sig, sig);
           const avg = hist.length ? hist.reduce((a, b) => a + b, 0) / hist.length : 0;
-          const jump = d > thr && d > avg * 2.2 + 0.04;
+          const jump = d > thr && d > avg * 1.7 + 0.025;
           const fade = prev.sig.mean > 18 && sig.mean < 6;
           if (jump || fade) samples.push({ a: prev.t, b: t, sigA: prev.sig, sigB: sig, d });
           hist.push(d); if (hist.length > 12) hist.shift();
@@ -218,7 +222,7 @@ export async function detectCuts(src, { onProgress, sensitivity = 0.5, signal } 
         if (sigDiff(sg, s.sigA) < sigDiff(sg, s.sigB)) a = m; else b = m;
       }
       const t = b;
-      if (!cuts.length || t - cuts[cuts.length - 1].t > 0.3) cuts.push({ t, d: s.d });
+      if (!cuts.length || t - cuts[cuts.length - 1].t > 0.25) cuts.push({ t, d: s.d });
       onProgress && onProgress(0.85 + 0.15 * (i + 1) / samples.length);
     }
     return { cuts, duration: dur, width: v.videoWidth, height: v.videoHeight };
@@ -231,76 +235,22 @@ export async function detectCuts(src, { onProgress, sensitivity = 0.5, signal } 
 
 // ---- clips ----
 
-// Speech intervals from the voice envelope (seconds)
-export function speechSpans(vdb) {
-  const env = smooth(normEnv(vdb), 3);
-  const spans = [];
-  let on = -1;
-  for (let i = 0; i <= env.length; i++) {
-    const act = i < env.length && env[i] > 0.4;
-    if (act && on < 0) on = i;
-    if (!act && on >= 0) { if (i - on > 6) spans.push([on / FPS, i / FPS]); on = -1; }
-  }
-  const merged = [];
-  for (const s of spans) {
-    const last = merged[merged.length - 1];
-    if (last && s[0] - last[1] < 0.35) last[1] = s[1]; else merged.push(s.slice());
-  }
-  return merged;
-}
-
-export function talkingAt(spans, t, pad = 0.15) {
-  return spans.some(([a, b]) => t > a + pad && t < b - pad);
-}
-
-// Every cut is a boundary unless: the shot would be shorter than minLen, or
-// someone is mid-sentence across it. Long shots get split in silences.
-export function buildBoundaries(cuts, duration, spans, { minLen = 3, maxLen = 22 } = {}) {
-  const pts = cuts.map(c => c.t).filter(t => t > 0.2 && t < duration - 0.2);
-  const bounds = [0];
-  for (const t of pts) {
-    const last = bounds[bounds.length - 1];
-    if (t - last < minLen) continue;
-    if (talkingAt(spans, t) && t - last < maxLen * 0.7) continue;
-    bounds.push(t);
-  }
-  const out = [0];
-  for (let i = 1; i <= bounds.length; i++) {
-    const a = out[out.length - 1];
-    const b = i < bounds.length ? bounds[i] : duration;
-    let cur = a;
-    while (b - cur > maxLen) {
-      let best = cur + maxLen, bestScore = -1;
-      for (let t = cur + maxLen * 0.5; t < cur + maxLen; t += 0.1) {
-        const gap = spans.reduce((m, [s, e]) => Math.min(m, t < s ? s - t : t > e ? t - e : 0), 99);
-        if (gap > bestScore) { bestScore = gap; best = t; }
-      }
-      out.push(best); cur = best;
-    }
-    if (i < bounds.length) {
-      if (b - out[out.length - 1] < minLen * 0.5 && out.length > 1) out[out.length - 1] = b; else out.push(b);
-    }
-  }
-  if (duration - out[out.length - 1] < 1 && out.length > 1) out.pop();
-  return out;
-}
-
-// Back-to-back clips covering the whole video, no gaps.
-export function clipsFromBoundaries(bounds, duration, spans) {
-  const pts = [...bounds.filter(b => b > 0 && b < duration), duration];
+// Every cut is its own clip. Only flash frames (<0.4 s) get folded into
+// the shot before them. Clips cover the whole video, back to back.
+export function clipsFromCuts(cuts, duration, spans) {
+  const pts = [...cuts.map(c => c.t).filter(t => t > 0.05 && t < duration - 0.05), duration];
   const clips = [];
   let start = 0;
   for (const end of pts) {
-    if (end - start < 0.8 && clips.length) { clips[clips.length - 1].end = end; start = end; continue; }
-    if (end - start < 0.05) continue;
+    if (end - start < 0.4) { if (clips.length) { clips[clips.length - 1].end = end; start = end; } continue; }
     clips.push({ start, end });
     start = end;
   }
   if (!clips.length) clips.push({ start: 0, end: duration });
   for (const c of clips) {
     c.talk = 0;
-    for (const [a, b] of spans) c.talk += Math.max(0, Math.min(b, c.end) - Math.max(a, c.start));
-    c.on = true;
+    for (const [x, y] of spans) c.talk += Math.max(0, Math.min(y, c.end) - Math.max(x, c.start));
+    c.dialogue = c.talk >= 0.3;
   }
   return clips;
 }

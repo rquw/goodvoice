@@ -1,5 +1,6 @@
 import { h, fmtBytes, toast, prefs } from './util.js';
-import { decodeAudio, voiceDb, detectCuts, speechSpans, buildBoundaries, clipsFromBoundaries, clipEnvelope, thumbnails } from './analyze.js';
+import { decodeAudio, voiceDb, detectCuts, clipsFromCuts, clipEnvelope, thumbnails } from './analyze.js';
+import { vadProbs, speechSpans } from './vad.js';
 import { transcribe, linesFor } from './asr.js';
 
 // Pick a video, it gets chopped into clips, done. The script keeps writing
@@ -77,52 +78,80 @@ export class Studio {
     const sig = this.abort.signal;
     this.setProgress('Reading the soundtrack', 0.02);
     try {
-      this.audio = await decodeAudio(this.file, p => this.setProgress('Reading the soundtrack', p * 0.12));
+      this.audio = await decodeAudio(this.file, p => this.setProgress('Reading the soundtrack', p * 0.08));
       this.vdb = voiceDb(this.audio);
-      this.spans = speechSpans(this.vdb);
     } catch (e) {
       console.warn('audio decode failed', e);
-      toast('Couldn’t read this file’s audio, so no scoring or script. MP4 (H.264 + AAC) is the safest bet.', 'bad');
-      this.audio = null; this.vdb = new Float32Array(0); this.spans = [];
+      toast('Couldn’t read this file’s audio, so no scoring or subtitles. MP4 (H.264 + AAC) is the safest bet.', 'bad');
+      this.audio = null; this.vdb = new Float32Array(0);
     }
     if (sig.aborted) return;
-    const res = await detectCuts(this.src, { sensitivity: prefs.get('cutSens', 0.5), signal: sig, onProgress: p => this.setProgress('Finding the cuts', 0.12 + p * 0.78) });
+    this.spans = [];
+    if (this.audio) {
+      // dialogue sits in the center of the mix, so that's what gets listened to
+      const { L, R } = this.audio;
+      const mid = new Float32Array(L.length);
+      for (let i = 0; i < mid.length; i++) mid[i] = (L[i] + R[i]) * 0.5;
+      try {
+        this.spans = speechSpans(await vadProbs(mid, p => this.setProgress('Finding the dialogue', 0.08 + p * 0.14)));
+      } catch (e) {
+        console.error(e);
+        toast('Voice detection failed: ' + e.message, 'bad');
+      }
+    }
     if (sig.aborted) return;
-    const bounds = buildBoundaries(res.cuts, res.duration, this.spans, { minLen: 3, maxLen: 20 });
-    const clips = clipsFromBoundaries(bounds, res.duration, this.spans);
-    this.clips = clips.map(c => ({ ...c, lines: [], thumb: '', stereo: this.audio ? this.audio.stereo : true }));
+    const res = await detectCuts(this.src, { sensitivity: prefs.get('cutSens2', 0.8), signal: sig, onProgress: p => this.setProgress('Finding every cut', 0.22 + p * 0.6) });
+    if (sig.aborted) return;
+    this.clips = clipsFromCuts(res.cuts, res.duration, this.spans).map(c => ({ ...c, lines: [], thumb: '', stereo: this.audio ? this.audio.stereo : true }));
 
-    this.setProgress('Grabbing thumbnails', 0.92);
+    this.setProgress('Grabbing thumbnails', 0.82);
     try {
       await thumbnails(this.src, this.clips.map(c => Math.min(c.end - 0.05, c.start + Math.min(1, (c.end - c.start) / 3))), (i, url) => {
         this.clips[i].thumb = url;
-        this.setProgress('Grabbing thumbnails', 0.92 + 0.08 * (i + 1) / this.clips.length);
+        this.setProgress('Grabbing thumbnails', 0.82 + 0.06 * (i + 1) / this.clips.length);
       });
     } catch (e) { console.warn(e); }
     if (sig.aborted) return;
-    this.setProgress('Ready', 1);
-    this.finish(false);
-    if (prefs.get('autoScript', true) && this.audio) this.runAsr();
+
+    // subtitles before playing, unless someone doesn't want to wait
+    if (prefs.get('autoScript', true) && this.audio && this.spans.length) {
+      let skip;
+      const skipped = new Promise(r => { skip = r; });
+      this.progEl.append(h('button', { class: 'btn small ghost', onclick: e => { e.target.remove(); skip(); } }, 'Start now, subtitles later'));
+      const asr = this.runAsr(p => this.setProgress(p.stage, 0.88 + 0.12 * (p.pct || 0)));
+      const first = await Promise.race([asr.then(() => 'done'), skipped.then(() => 'skip')]);
+      if (sig.aborted) return;
+      this.setProgress('Ready', 1);
+      this.finish(false);
+      if (first === 'skip') asr.then(ok => { if (ok && !sig.aborted) this.finish(true); });
+    } else {
+      this.setProgress('Ready', 1);
+      this.finish(false);
+    }
   }
 
-  async runAsr() {
+  async runAsr(onProgress) {
     const sig = this.abort.signal;
     try {
-      this.words = await transcribe(this.audio, this.vdb, { signal: sig, onProgress: p => this.onAsr && this.onAsr(p) });
-      if (sig.aborted) return;
+      this.words = await transcribe(this.audio, this.spans, { signal: sig, onProgress: p => { onProgress && onProgress(p); this.onAsr && this.onAsr(p); } });
+      if (sig.aborted) return false;
       for (const c of this.clips) c.lines = linesFor(this.words, c.start, c.end);
-      this.onAsr && this.onAsr({ stage: 'Script ready', pct: 1 });
-      this.finish(true);
+      this.onAsr && this.onAsr({ stage: 'Subtitles ready', pct: 1 });
+      return true;
     } catch (e) {
       console.error(e);
-      if (!sig.aborted) this.onAsr && this.onAsr({ stage: 'No auto script (couldn’t load the speech model)', pct: 0, failed: true });
+      if (!sig.aborted) {
+        toast('Subtitles failed: ' + e.message, 'bad');
+        this.onAsr && this.onAsr({ stage: 'No subtitles (' + e.message.slice(0, 60) + ')', pct: 0, failed: true });
+      }
+      return false;
     }
   }
 
   finish(auto) {
     const clips = this.clips.map(c => ({
-      start: c.start, end: c.end, lines: c.lines, thumb: c.thumb, stereo: c.stereo,
-      env: this.vdb.length ? clipEnvelope(this.vdb, c.start, c.end, c.lines) : '',
+      start: c.start, end: c.end, lines: c.lines, thumb: c.thumb, stereo: c.stereo, dialogue: !!c.dialogue,
+      env: this.vdb.length ? clipEnvelope(this.vdb, c.start, c.end, this.spans) : '',
     }));
     this.finishedClips = clips;
     this.onDone(clips, { file: this.file, src: this.src }, !!auto);

@@ -8,20 +8,23 @@ Solo works fully offline-ish in the browser. Party mode needs this little server
 
 ## what it does
 
-- upload any movie clip (mp4, mov, webm, mkv). cuts are detected automatically
-  and it goes straight into the game: every clip once, in order. record, then
-  redo or next, until the movie's done. nothing gets skipped: the clips cover
-  the whole upload front to back
-- auto script: Whisper runs **in your browser** (transformers.js), no API key.
-  first run downloads the model (~80 MB), then it's cached. it writes in the
-  background while you're already playing
+- upload any movie clip (mp4, mov, webm, mkv). every cut becomes its own clip.
+  a neural voice detector (Silero VAD) finds which clips have dialogue, and
+  you only record those: record, then redo or next. the clips without
+  dialogue come back untouched in the final video, so it's the whole upload
+  front to back
+- subtitles: Whisper runs **in your browser** (transformers.js), no API key.
+  the model and runtime are served by this server (from npm), so it doesn't
+  depend on Hugging Face or a CDN. karaoke-style while you record, not in the
+  final video
 - voice removal without AI: film dialogue sits dead center in the stereo mix, so
   the center gets cancelled and music/effects on the sides stay. mono files get
   the speech band notched out instead. or just mute everything
 - karaoke-style script, live visualizer (the pale shape is the actor's voice,
   yours fills in over it), 3-2-1 countdown
 - scoring like the original: 58% rhythm, 32% duration, 10% coverage, five judges
-  hand out 0–5 stars
+  hand out 0–5 stars. both the actor's shape and yours only count speech the
+  voice detector hears, so music, room noise and speaker bleed don't score
 - party mode: room codes, everyone records at the same time, takes get played
   back one by one, judges + audience vote, podium at the end
 - when it's done the full dub plays right away: the whole upload, front to back,

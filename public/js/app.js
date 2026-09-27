@@ -137,14 +137,14 @@ async function settings() {
       h('p', { class: 'fine' }, 'If your dub plays back late, drag left. Early, drag right. Bluetooth headphones usually need −100 to −250.')),
     h('div', { class: 'opt' }, h('label', {}, 'Solo: while you record you hear'),
       sel('removal', 'center', [['center', 'The clip with voices removed'], ['mute', 'Nothing (muted)'], ['original', 'The original (voices too)']])),
-    h('div', { class: 'opt' }, h('label', {}, 'Auto-script model'),
-      sel('asrModel', 'base', Object.entries(MODELS).map(([k, m]) => [k, m.label]))),
-    h('div', { class: 'opt' }, h('label', {}, 'Script language'),
+    h('div', { class: 'opt' }, h('label', {}, 'Subtitle model'),
+      sel('asrModel2', 'tiny', Object.entries(MODELS).map(([k, m]) => [k, m.label]))),
+    h('div', { class: 'opt' }, h('label', {}, 'Subtitle language'),
       sel('asrLang', '', [['', 'Detect automatically'], ['english', 'English'], ['german', 'German'], ['french', 'French'], ['spanish', 'Spanish'], ['italian', 'Italian'], ['japanese', 'Japanese'], ['korean', 'Korean'], ['portuguese', 'Portuguese'], ['russian', 'Russian'], ['turkish', 'Turkish'], ['dutch', 'Dutch'], ['polish', 'Polish'], ['swedish', 'Swedish']])),
-    chk('autoScript', true, 'Write the script automatically (downloads the model once, runs on your device)'),
-    chk('asrGpu', false, 'Use the GPU for the script (faster, experimental)'),
+    chk('autoScript', true, 'Automatic subtitles (runs on your device)'),
+    chk('asrGpu', false, 'Use the GPU for subtitles (faster, experimental)'),
     h('div', { class: 'opt' }, h('label', {}, 'Cut detection sensitivity'),
-      h('input', { type: 'range', min: 0, max: 1, step: 0.1, value: prefs.get('cutSens', 0.5), onchange: e => prefs.set('cutSens', +e.target.value) })),
+      h('input', { type: 'range', min: 0, max: 1, step: 0.1, value: prefs.get('cutSens2', 0.8), onchange: e => prefs.set('cutSens2', +e.target.value) })),
     chk('sfxOff', false, 'Mute game sounds'),
     h('div', { class: 'opt' }, h('button', { class: 'btn', onclick: async () => { if (await ensureMic()) toast('Mic works 🎙'); } }, 'Test microphone'), micMeter()));
   modal('Settings', body);
@@ -171,7 +171,10 @@ function soloStudio() {
 function soloPlay(clips, info, studio) {
   const stage = new Stage();
   const takes = clips.map(() => null);
+  // only clips with someone talking get dubbed; the rest come back in the final cut
+  const order = clips.map((c, k) => k).filter(k => clips[k].dialogue !== false);
   let i = 0;
+  const cur = () => order[i];
   let busy = false;
   const removal = prefs.get('removal', 'center');
 
@@ -205,39 +208,40 @@ function soloPlay(clips, info, studio) {
   studio.asrNote = p => { note.textContent = p.pct >= 1 || p.failed ? p.stage : `${p.stage}${p.pct ? ` ${Math.round(p.pct * 100)}%` : ''}…`; if (p.pct >= 1) setTimeout(() => { note.textContent = ''; }, 3000); };
   studio.soloUpdate = updated => {
     updated.forEach((c, k) => { if (clips[k]) { clips[k].lines = c.lines; clips[k].env = c.env; } });
-    if (stage.clip && !busy) stage.cue(clips[i]).catch(() => {});
+    if (stage.clip && !busy && order.length) stage.cue(clips[cur()]).catch(() => {});
   };
 
   function sync() {
-    title.replaceChildren(h('b', {}, `Clip ${i + 1}`), h('span', {}, ` / ${clips.length}`));
-    bar.firstChild.style.width = (i / clips.length * 100) + '%';
-    btnNext.textContent = i === clips.length - 1 ? 'Finish →' : 'Next →';
-    const t = takes[i];
+    title.replaceChildren(h('b', {}, `Line ${i + 1}`), h('span', {}, ` / ${order.length}`));
+    bar.firstChild.style.width = (i / order.length * 100) + '%';
+    btnNext.textContent = i === order.length - 1 ? 'Finish →' : 'Next →';
+    const t = takes[cur()];
     controls.replaceChildren(...(busy ? [] : t ? [btnRedo, btnWatch, btnNext] : [btnRec]));
   }
 
   async function go(k) {
-    if (k >= clips.length) return finish();
+    if (k >= order.length) return finish();
     stage.stopAll(); busy = false;
     i = k;
     resultBox.classList.add('hidden');
     sync();
-    await stage.load(info.src, clips[i]);
+    await stage.load(info.src, clips[cur()]);
   }
 
   async function record() {
     if (busy) return;
     audioCtx();
     if (!(await ensureMic())) return;
-    const clip = clips[i];
+    const ci = cur();
+    const clip = clips[ci];
     busy = true; sync();
     resultBox.classList.add('hidden');
     try {
       const res = await safePlay(stage, { removal, record: true, countdown: true });
       if (res && res.pcm) {
-        const env = takeEnvelope(res.pcm, res.sr);
-        const score = scoreTake(refEnvelope(clip), env, `solo:${i}:${Date.now()}`);
-        takes[i] = { env, score, voice: makeVoice(res.pcm, res.sr) };
+        const env = await takeEnvelope(res.pcm, res.sr);
+        const score = scoreTake(refEnvelope(clip), env, `solo:${ci}:${Date.now()}`);
+        takes[ci] = { env, score, voice: makeVoice(res.pcm, res.sr) };
         stage.showTake(env);
         busy = false; sync();
         await showResult(score);
@@ -247,9 +251,9 @@ function soloPlay(clips, info, studio) {
   }
 
   async function watch() {
-    if (busy || !takes[i]) return;
+    if (busy || !takes[cur()]) return;
     busy = true; sync();
-    try { await safePlay(stage, { removal, voice: takes[i].voice }); } catch (e) { toast(e.message, 'bad'); }
+    try { await safePlay(stage, { removal, voice: takes[cur()].voice }); } catch (e) { toast(e.message, 'bad'); }
     busy = false; sync();
   }
 
@@ -265,14 +269,16 @@ function soloPlay(clips, info, studio) {
     const done = clips.map((c, k) => ({ c, k, t: takes[k] })).filter(x => x.t);
     const avg = done.length ? Math.round(done.reduce((a, x) => a + x.t.score.total, 0) / done.length) : 0;
     const stars = done.reduce((a, x) => a + x.t.score.judgePts, 0);
-    const segs = done.map(x => ({ clip: x.c, voice: x.t.voice, name: me.name || 'You', color: '#ffd23f', removal }));
+    const segs = clips.map((c, k) => takes[k]
+      ? { clip: c, voice: takes[k].voice, name: me.name || 'You', color: '#ffd23f', removal }
+      : { clip: c, voice: null, name: '', removal: c.dialogue !== false ? removal : 'original' });
     const st = new Stage();
     let reel = null;
     const main = h('div', { class: 'play-main' });
     if (segs.length) {
       reel = new ReelPlayer(st, segs, removal);
       main.append(st.el, reelControls(reel, { onPlay: p => reel.play(p).catch(() => {}), onPause: p => reel.pause(p), onSeek: p => (reel.playing ? reel.play(p) : reel.pause(p)) }));
-    } else main.append(h('p', { class: 'fine center' }, 'You skipped everything. Bold.'));
+    }
     const el2 = h('section', { class: 'screen summary' },
       h('div', { class: 'play-head' }, h('span'), h('div', { class: 'play-title' }, h('b', {}, 'Your dub')), h('span')),
       h('div', { class: 'play-grid' },
@@ -280,7 +286,7 @@ function soloPlay(clips, info, studio) {
         h('aside', { class: 'play-side' },
           h('div', { class: 'sum-top card' },
             h('div', { class: 'big-stat' }, h('b', {}, avg + '%'), h('span', {}, 'average')),
-            h('div', { class: 'big-stat' }, h('b', {}, `${done.length}/${clips.length}`), h('span', {}, 'dubbed')),
+            h('div', { class: 'big-stat' }, h('b', {}, `${done.length}/${order.length}`), h('span', {}, 'lines dubbed')),
             h('div', { class: 'big-stat' }, h('b', {}, '★ ' + stars), h('span', {}, 'stars'))),
           h('div', { class: 'final-btns col' },
             segs.length ? h('button', { class: 'btn big primary', onclick: () => { reel.pause(); exportFlow({ src: info.src, segments: segs, name: 'choicer-voicer-dub' }); } }, '⬇ Download') : null,
@@ -290,6 +296,7 @@ function soloPlay(clips, info, studio) {
     if (reel) st.load(info.src).then(() => reel.play(0)).catch(e => { if (e.name === 'NotAllowedError') tapToContinue(() => reel.play(0)); });
   }
 
+  if (!order.length) { toast('No dialogue found in that video.', 'bad'); finish(); return; }
   go(0);
 }
 
@@ -623,7 +630,7 @@ const party = {
       if (!still()) return;
       const res = await safePlay(stage, { removal, record: true, countdown: true });
       if (!still() || !res || !res.pcm) return;
-      const env = takeEnvelope(res.pcm, res.sr);
+      const env = await takeEnvelope(res.pcm, res.sr);
       const score = scoreTake(refEnvelope(clip), env, `${r.code}:${r.round}:${this.net.pid}`);
       stage.showTake(env);
       this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, 'Sending your take…'), h('div', { class: 'spinner small' })));
@@ -653,7 +660,7 @@ const party = {
       if (!still()) return;
       await stage.load(this.mediaSrc, clip);
       if (!still()) return;
-      if (voice) stage.showTake(takeEnvelope(voice.getChannelData(0), voice.sampleRate));
+      if (voice) takeEnvelope(voice.getChannelData(0), voice.sampleRate).then(env => { if (still()) stage.showTake(env); });
       await safePlay(stage, { removal, voice });
       if (!still() || !take) return;
       res.classList.remove('hidden');
@@ -754,16 +761,16 @@ const party = {
   // the movie with every clip's winning take, same on every screen
   async reelSegments() {
     const r = this.room;
+    const byClip = new Map(r.history.map((e, k) => [e.clip, { e, k }]));
     const segs = [];
-    for (let k = 0; k < r.history.length; k++) {
-      const e = r.history[k];
-      const clip = this.clips[e.clip];
-      if (!clip) continue;
-      const top = e.takes[0];
+    for (let ci = 0; ci < this.clips.length; ci++) {
+      const clip = this.clips[ci];
+      const hit = byClip.get(ci);
+      const top = hit && hit.e.takes[0];
       let voice = null;
-      if (top) try { voice = await this.getTake(k, { pid: top.pid, url: top.url }); } catch {}
+      if (top) try { voice = await this.getTake(hit.k, { pid: top.pid, url: top.url }); } catch {}
       const p = top && this.player(top.pid);
-      segs.push({ clip, voice, name: top ? top.name : '', color: p ? p.color : '#ffd23f', removal: r.settings.removal });
+      segs.push({ clip, voice, name: top ? top.name : '', color: p ? p.color : '#ffd23f', removal: hit || clip.dialogue ? r.settings.removal : 'original' });
     }
     return segs;
   },
@@ -786,7 +793,7 @@ const party = {
     }));
     await reel.pause(0);
     clearInterval(this.watchTimer);
-    this.watchTimer = setInterval(() => this.syncWatch(), 800);
+    this.watchTimer = setInterval(() => this.syncWatch(), 500);
     this.syncWatch();
   },
 
@@ -805,7 +812,7 @@ const party = {
       const target = w.pos + (this.net.now() - w.at) / 1000;
       if (target < 0) { if (reel.playing) reel.pause(w.pos); return; }
       if (target >= reel.total) { if (reel.playing) reel.pause(reel.total); return; }
-      if (!reel.playing || Math.abs(reel.pos - target) > 0.4) {
+      if (!reel.playing || Math.abs(reel.pos - target) > 0.2) {
         reel.play(target + 0.1).catch(e => { if (e.name === 'NotAllowedError') tapToContinue(() => this.syncWatch()); });
       }
     } else if (reel.playing || Math.abs(reel.pos - w.pos) > 0.05) {

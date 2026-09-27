@@ -111,3 +111,25 @@ export async function fixDuration(video) {
   await seekTo(video, 0).catch(() => {});
   return video.duration;
 }
+
+export function resample(pcm, from, to) {
+  if (from === to) return pcm;
+  const n = Math.round(pcm.length * to / from);
+  const out = new Float32Array(n);
+  const k = from / to;
+  if (k > 1) {
+    // average down so higher frequencies don't alias
+    for (let i = 0; i < n; i++) {
+      const a = Math.floor(i * k), b = Math.min(pcm.length, Math.floor((i + 1) * k));
+      let s = 0;
+      for (let j = a; j < b; j++) s += pcm[j];
+      out[i] = b > a ? s / (b - a) : 0;
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      const x = i * k, i0 = Math.floor(x), f = x - i0;
+      out[i] = (pcm[i0] || 0) * (1 - f) + (pcm[i0 + 1] || 0) * f;
+    }
+  }
+  return out;
+}

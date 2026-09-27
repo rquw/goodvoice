@@ -1,5 +1,6 @@
 import { prefs } from './util.js';
-import { SR, FPS, pct } from './analyze.js';
+import { SR } from './analyze.js';
+import { base } from './vad.js';
 
 let worker = null;
 let seq = 0;
@@ -27,44 +28,34 @@ function call(msg, onProgress, transfer) {
 }
 
 export const MODELS = {
-  tiny: { id: 'Xenova/whisper-tiny', label: 'Fast (~40 MB)' },
-  base: { id: 'Xenova/whisper-base', label: 'Balanced (~80 MB)' },
-  small: { id: 'Xenova/whisper-small', label: 'Accurate (~250 MB, slow)' },
+  tiny: { id: 'Xenova/whisper-tiny', label: 'Built in (fast, served by this site)' },
+  base: { id: 'Xenova/whisper-base', label: 'Better (~80 MB from Hugging Face)' },
+  small: { id: 'Xenova/whisper-small', label: 'Best (~250 MB from Hugging Face, slow)' },
 };
 
 function modelOpts() {
-  const m = MODELS[prefs.get('asrModel', 'base')] || MODELS.base;
+  const m = MODELS[prefs.get('asrModel2', 'tiny')] || MODELS.tiny;
   const lang = prefs.get('asrLang', '');
-  return { model: m.id, language: lang || null, gpu: prefs.get('asrGpu', false) };
+  return { base: base(), model: m.id, language: lang || null, gpu: prefs.get('asrGpu', false) };
 }
 
-// Cut the track into <=28 s windows, split in the quietest spot, skip silence.
-function windows(L, R, vdb) {
-  const total = L.length / SR;
-  const quiet = pct(vdb, 0.5);
+// Group the detected speech into <=28 s windows so whisper never hears
+// long stretches of music (that's where it hallucinates).
+function windows(spans, total) {
   const out = [];
-  let a = 0;
-  while (a < total - 0.3) {
-    let b = Math.min(total, a + 28);
-    if (b < total) {
-      let best = b, bestV = Infinity;
-      for (let t = a + 18; t < b; t += 1 / FPS) {
-        const v = vdb[Math.floor(t * FPS)] ?? 0;
-        if (v < bestV) { bestV = v; best = t; }
-      }
-      b = best;
-    }
-    let loud = 0;
-    for (let f = Math.floor(a * FPS); f < Math.floor(b * FPS); f++) if (vdb[f] > quiet + 8) loud++;
-    if (loud > FPS * 0.4) out.push([a, b]);
-    a = b;
+  for (const [a0, b0] of spans) {
+    let a = Math.max(0, a0 - 0.2), b = Math.min(total, b0 + 0.2);
+    const last = out[out.length - 1];
+    if (last && b - last[0] <= 28 && a - last[1] < 4) { last[1] = b; continue; }
+    while (b - a > 28) { out.push([a, a + 28]); a += 28; }
+    out.push([a, b]);
   }
   return out;
 }
 
 const JUNK = /^\s*[\[(♪*].*[\])♪*]\s*$|^\s*♪+\s*$/;
 
-export async function transcribe(audio, vdb, { onProgress, signal } = {}) {
+export async function transcribe(audio, spans, { onProgress, signal } = {}) {
   const opts = modelOpts();
   onProgress && onProgress({ stage: 'Loading speech model', pct: 0 });
   const files = new Map();
@@ -72,9 +63,9 @@ export async function transcribe(audio, vdb, { onProgress, signal } = {}) {
     files.set(p.file, p);
     let l = 0, t = 0;
     for (const f of files.values()) { l += f.loaded; t += f.total; }
-    onProgress && onProgress({ stage: 'Downloading speech model (once)', pct: t ? l / t : 0 });
+    onProgress && onProgress({ stage: 'Loading the subtitle model', pct: t ? l / t : 0 });
   });
-  const wins = windows(audio.L, audio.R, vdb);
+  const wins = windows(spans, audio.L.length / SR);
   const words = [];
   for (let i = 0; i < wins.length; i++) {
     if (signal && signal.aborted) break;
@@ -82,7 +73,7 @@ export async function transcribe(audio, vdb, { onProgress, signal } = {}) {
     const s = Math.floor(a * SR), e = Math.floor(b * SR);
     const mono = new Float32Array(e - s);
     for (let k = 0; k < mono.length; k++) mono[k] = (audio.L[s + k] + audio.R[s + k]) * 0.5;
-    onProgress && onProgress({ stage: `Writing the script ${i + 1}/${wins.length}`, pct: i / wins.length });
+    onProgress && onProgress({ stage: `Writing subtitles ${i + 1}/${wins.length}`, pct: i / wins.length });
     const out = await call({ type: 'run', ...opts, audio: mono }, null, [mono.buffer]);
     for (const c of out.chunks) {
       const txt = (c.text || '').trim();
@@ -94,7 +85,9 @@ export async function transcribe(audio, vdb, { onProgress, signal } = {}) {
     }
   }
   onProgress && onProgress({ stage: 'Script ready', pct: 1 });
-  return words.filter(w => !/^[\[(].*[\])]$/.test(w.w));
+  // drop anything whisper "heard" where the voice detector found no speech
+  const near = w => spans.some(([a, b]) => w.t1 > a - 0.3 && w.t0 < b + 0.3);
+  return words.filter(w => !/^[\[(].*[\])]$/.test(w.w) && near(w));
 }
 
 export function spread(text, t0, t1) {

@@ -44,13 +44,15 @@ export class ReelPlayer {
   showSeg(i) {
     const s = this.segs[i];
     const st = this.stage;
+    st.subsOff = true;
     st.clip = s.clip;
     st.ref = refEnvelope(s.clip);
     st.lastLine = -1;
+    st.showTake([]);
     if (s.voice) {
       if (!this.envCache.has(i)) this.envCache.set(i, takeEnvelope(s.voice.getChannelData(0), s.voice.sampleRate));
-      st.showTake(this.envCache.get(i));
-    } else st.showTake([]);
+      this.envCache.get(i).then(env => { if (this.i === i) st.showTake(env); }).catch(() => {});
+    }
     st.setBadge(s.name ? '🎙 ' + s.name : '', s.color);
   }
 
@@ -120,7 +122,7 @@ export class ReelPlayer {
     }
   }
 
-  destroy() { this.token++; this.stopVoice(); this.stage.video.pause(); this.listeners.clear(); }
+  destroy() { this.token++; this.stopVoice(); this.stage.video.pause(); this.stage.subsOff = false; this.listeners.clear(); }
 }
 
 // Play/pause + scrub bar. Callbacks decide whether that's local or shared.

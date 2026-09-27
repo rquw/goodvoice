@@ -1,4 +1,5 @@
-import { FPS, bandDb, normEnv, smooth } from './analyze.js';
+import { FPS, bandDb, normEnv, smooth, gateEnv } from './analyze.js';
+import { vadOn, speechSpans } from './vad.js';
 import { b64ToU8, clamp, rng, hashStr } from './util.js';
 
 export const JUDGES = [
@@ -36,8 +37,17 @@ export function refEnvelope(clip) {
   return env;
 }
 
-export function takeEnvelope(pcm, sr) {
-  return normEnv(bandDb(pcm, sr));
+// Your take's shape, counting only the moments the voice detector hears
+// speech, so room noise and speaker bleed don't score (or show up).
+export async function takeEnvelope(pcm, sr) {
+  const env = normEnv(bandDb(pcm, sr));
+  try {
+    const spans = speechSpans(await vadOn(pcm, sr), { on: 0.5, off: 0.3, minSpeech: 0.12, pad: 0.08, gap: 0.25 });
+    return gateEnv(env, spans);
+  } catch (e) {
+    console.warn('vad failed, using raw envelope', e);
+    return env;
+  }
 }
 
 function active(env, thr = 0.35) { return env.map(v => (v > thr ? 1 : 0)); }
