@@ -188,10 +188,16 @@ function soloPlay(clips, info, studio) {
   resultBox.append(h('div', { class: 'result-top' }, g, bars), jp);
 
   const btnRec = h('button', { class: 'btn big rec', onclick: () => record() }, '🎙 Record');
-  const btnRedo = h('button', { class: 'btn big', onclick: () => record() }, '↻ Redo');
-  const btnWatch = h('button', { class: 'btn big ghost', onclick: () => watch() }, '▶ Watch');
+  const btnRedo = h('button', { class: 'btn big rec', onclick: () => record() }, '↻ Redo');
+  const btnOrig = h('button', { class: 'btn big', onclick: () => listen() }, '👂 Original');
+  const btnWatch = h('button', { class: 'btn big ghost', onclick: () => watch() }, '▶ Mine');
   const btnNext = h('button', { class: 'btn big primary', onclick: () => go(i + 1) });
+  const btnStop = h('button', { class: 'btn big ghost', onclick: () => { stage.stopAll(); } }, '■ Stop');
   const controls = h('div', { class: 'controls' });
+  const status = h('div', { class: 'play-status' });
+  const lineText = h('div', { class: 'line-text' });
+  let mode = '';
+  let asrInfo = studio.asrFailed ? { failed: true, stage: studio.asrFailed } : null;
 
   const el = h('section', { class: 'screen play' },
     h('div', { class: 'play-head' },
@@ -200,23 +206,41 @@ function soloPlay(clips, info, studio) {
       h('span', { class: 'fine' }, '')),
     bar,
     h('div', { class: 'play-grid' },
-      h('div', { class: 'play-main' }, stage.el, controls, micMeter(), note),
-      h('aside', { class: 'play-side' }, resultBox)));
+      h('div', { class: 'play-main' }, stage.el, status, controls, micMeter(), note),
+      h('aside', { class: 'play-side' }, h('div', { class: 'card line-card' }, h('small', {}, 'The line'), lineText), resultBox)));
 
   show({ el, destroy: () => stage.destroy() }, 'is-play');
 
-  studio.asrNote = p => { note.textContent = p.pct >= 1 || p.failed ? p.stage : `${p.stage}${p.pct ? ` ${Math.round(p.pct * 100)}%` : ''}…`; if (p.pct >= 1) setTimeout(() => { note.textContent = ''; }, 3000); };
+  studio.asrNote = p => {
+    asrInfo = p;
+    note.textContent = p.pct >= 1 || p.failed ? p.stage : `${p.stage}${p.pct ? ` ${Math.round(p.pct * 100)}%` : ''}…`;
+    if (p.pct >= 1) setTimeout(() => { note.textContent = ''; }, 3000);
+    showLine();
+  };
   studio.soloUpdate = updated => {
     updated.forEach((c, k) => { if (clips[k]) { clips[k].lines = c.lines; clips[k].env = c.env; } });
     if (stage.clip && !busy && order.length) stage.cue(clips[cur()]).catch(() => {});
+    showLine();
   };
+
+  function showLine() {
+    const c = clips[cur()];
+    const text = c && c.lines && c.lines.length ? c.lines.map(l => l.text).join(' ') : '';
+    if (text) { lineText.textContent = text; lineText.className = 'line-text'; return; }
+    lineText.className = 'line-text none';
+    if (asrInfo && asrInfo.failed) lineText.textContent = asrInfo.stage + '. Hit Original and listen.';
+    else if (asrInfo && asrInfo.pct < 1) lineText.textContent = 'Subtitles are still being written…';
+    else lineText.textContent = 'No words recognised here. Hit Original and listen.';
+  }
 
   function sync() {
     title.replaceChildren(h('b', {}, `Line ${i + 1}`), h('span', {}, ` / ${order.length}`));
     bar.firstChild.style.width = (i / order.length * 100) + '%';
     btnNext.textContent = i === order.length - 1 ? 'Finish →' : 'Next →';
     const t = takes[cur()];
-    controls.replaceChildren(...(busy ? [] : t ? [btnRedo, btnWatch, btnNext] : [btnRec]));
+    status.textContent = mode === 'listen' ? '👂 The original. Listen to how they say it.' : mode === 'mine' ? '▶ Your take' : mode === 'record' || t ? '' : 'Got it? Hit Record. The countdown gives you 3 seconds.';
+    controls.replaceChildren(...(busy ? (mode === 'record' ? [] : [btnStop]) : t ? [btnRedo, btnOrig, btnWatch, btnNext] : [btnOrig, btnRec]));
+    showLine();
   }
 
   async function go(k) {
@@ -226,6 +250,16 @@ function soloPlay(clips, info, studio) {
     resultBox.classList.add('hidden');
     sync();
     await stage.load(info.src, clips[cur()]);
+    if (i === k && !takes[cur()]) listen();
+  }
+
+  // the actor's version plays first so you know what to say and how
+  async function listen() {
+    if (busy) return;
+    audioCtx();
+    busy = true; mode = 'listen'; sync();
+    try { await safePlay(stage, { removal: 'original' }); } catch (e) { toast(e.message, 'bad'); }
+    busy = false; mode = ''; sync();
   }
 
   async function record() {
@@ -234,7 +268,7 @@ function soloPlay(clips, info, studio) {
     if (!(await ensureMic())) return;
     const ci = cur();
     const clip = clips[ci];
-    busy = true; sync();
+    busy = true; mode = 'record'; sync();
     resultBox.classList.add('hidden');
     try {
       const res = await safePlay(stage, { removal, record: true, countdown: true });
@@ -243,18 +277,18 @@ function soloPlay(clips, info, studio) {
         const score = scoreTake(refEnvelope(clip), env, `solo:${ci}:${Date.now()}`);
         takes[ci] = { env, score, voice: makeVoice(res.pcm, res.sr) };
         stage.showTake(env);
-        busy = false; sync();
+        busy = false; mode = ''; sync();
         await showResult(score);
       }
     } catch (e) { console.error(e); toast(e.message, 'bad'); }
-    busy = false; sync();
+    busy = false; mode = ''; sync();
   }
 
   async function watch() {
     if (busy || !takes[cur()]) return;
-    busy = true; sync();
+    busy = true; mode = 'mine'; sync();
     try { await safePlay(stage, { removal, voice: takes[cur()].voice }); } catch (e) { toast(e.message, 'bad'); }
-    busy = false; sync();
+    busy = false; mode = ''; sync();
   }
 
   async function showResult(score) {
@@ -612,7 +646,7 @@ const party = {
     }
 
     if (phase === 'preview') {
-      this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, '👂 Listen closely'), h('p', {}, 'This is the original. You’re up next.')));
+      this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, '👂 Listen closely'), h('p', {}, 'This is the original. You’re up next.')), lineCard(clip));
       await stage.load(this.mediaSrc, clip);
       if (!still()) return;
       await safePlay(stage, { removal: 'original' });
@@ -624,7 +658,7 @@ const party = {
         this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, 'You’re in next round'), h('p', {}, 'Everyone else is recording right now.')));
         return;
       }
-      this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, '🎙 Your turn'), h('p', {}, 'Everyone records at the same time. Match the timing!'), micMeter()));
+      this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, '🎙 Your turn'), h('p', {}, 'Everyone records at the same time. Match the timing!'), micMeter()), lineCard(clip));
       if (!(await ensureMic())) { this.panel.replaceChildren(h('div', { class: 'phase-card' }, h('h2', {}, 'No mic 😶'), h('p', {}, 'Allow the microphone to play.'))); return; }
       await stage.load(this.mediaSrc, clip);
       if (!still()) return;
@@ -832,6 +866,12 @@ const party = {
     await exportFlow({ src: this.mediaSrc, segments: segs, name: 'choicer-voicer-dub' });
   },
 };
+
+function lineCard(clip) {
+  const text = clip && clip.lines && clip.lines.length ? clip.lines.map(l => l.text).join(' ') : '';
+  return h('div', { class: 'card line-card' }, h('small', {}, 'The line'),
+    h('div', { class: 'line-text' + (text ? '' : ' none') }, text || 'No subtitles for this one. Listen to the original.'));
+}
 
 function gradeOf(total) {
   if (total >= 92) return 'LEGENDARY';

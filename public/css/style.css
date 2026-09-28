@@ -404,3 +404,12 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .final-btns.col { flex-direction: column; margin-top: 0; }
 .summary .sum-top { margin-bottom: 12px; }
 .render-video { width: 100%; border-radius: 12px; background: #000; margin-bottom: 12px; display: block; pointer-events: none; }
+
+.play-status { text-align: center; font-weight: 700; min-height: 22px; color: var(--yellow); }
+.line-card { display: flex; flex-direction: column; gap: 6px; }
+.line-card small { color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; font-weight: 700; }
+.line-text { font-size: 22px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.line-text.none { font-size: 15px; font-weight: 600; color: var(--dim); }
+.asr-fail { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 12px; border: 1px solid rgba(255, 62, 127, 0.6); background: rgba(255, 62, 127, 0.08); }
+.asr-fail .row { display: flex; gap: 8px; justify-content: center; }
+.game-col .line-card { margin-top: 10px; }

@@ -2,6 +2,20 @@ import { h, fmtBytes, toast, prefs } from './util.js';
 import { decodeAudio, voiceDb, detectCuts, clipsFromCuts, clipEnvelope, thumbnails } from './analyze.js';
 import { vadProbs, speechSpans } from './vad.js';
 import { transcribe, linesFor } from './asr.js';
+import { FPS, normEnv, smooth } from './analyze.js';
+
+// fallback when the neural detector can't run: loud stretches in the voice band
+function loudSpans(vdb) {
+  const env = smooth(normEnv(vdb), 3);
+  const out = [];
+  let on = -1;
+  for (let i = 0; i <= env.length; i++) {
+    const act = i < env.length && env[i] > 0.45;
+    if (act && on < 0) on = i;
+    if (!act && on >= 0) { if (i - on > 8) out.push([on / FPS, i / FPS]); on = -1; }
+  }
+  return out;
+}
 
 // Pick a video, it gets chopped into clips, done. The script keeps writing
 // itself in the background and gets pushed out through onDone(..., true).
@@ -96,7 +110,8 @@ export class Studio {
         this.spans = speechSpans(await vadProbs(mid, p => this.setProgress('Finding the dialogue', 0.08 + p * 0.14)));
       } catch (e) {
         console.error(e);
-        toast('Voice detection failed: ' + e.message, 'bad');
+        toast('Voice detector failed (' + e.message + '), using a rougher loudness check instead.', 'bad');
+        this.spans = loudSpans(this.vdb);
       }
     }
     if (sig.aborted) return;
@@ -118,8 +133,21 @@ export class Studio {
       let skip;
       const skipped = new Promise(r => { skip = r; });
       this.progEl.append(h('button', { class: 'btn small ghost', onclick: e => { e.target.remove(); skip(); } }, 'Start now, subtitles later'));
-      const asr = this.runAsr(p => this.setProgress(p.stage, 0.88 + 0.12 * (p.pct || 0)));
-      const first = await Promise.race([asr.then(() => 'done'), skipped.then(() => 'skip')]);
+      let asr = this.runAsr(p => this.setProgress(p.stage, 0.88 + 0.12 * (p.pct || 0)));
+      let first = await Promise.race([asr.then(ok => (ok ? 'done' : 'fail')), skipped.then(() => 'skip')]);
+      // a failure gets shown and waits for a decision, it doesn't just vanish
+      while (first === 'fail' && !sig.aborted) {
+        this.progEl.querySelector('button')?.remove();
+        const pick = await new Promise(r => this.progEl.append(h('div', { class: 'asr-fail' },
+          h('b', {}, 'Subtitles failed'),
+          h('p', { class: 'fine' }, this.asrFailed || 'unknown error'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn small primary', onclick: e => { e.target.closest('.asr-fail').remove(); r('retry'); } }, 'Retry'),
+            h('button', { class: 'btn small ghost', onclick: e => { e.target.closest('.asr-fail').remove(); r('go'); } }, 'Play without subtitles')))));
+        if (pick === 'go') { first = 'done'; break; }
+        asr = this.runAsr(p => this.setProgress(p.stage, 0.88 + 0.12 * (p.pct || 0)));
+        first = (await asr) ? 'done' : 'fail';
+      }
       if (sig.aborted) return;
       this.setProgress('Ready', 1);
       this.finish(false);
@@ -141,8 +169,8 @@ export class Studio {
     } catch (e) {
       console.error(e);
       if (!sig.aborted) {
-        toast('Subtitles failed: ' + e.message, 'bad');
-        this.onAsr && this.onAsr({ stage: 'No subtitles (' + e.message.slice(0, 60) + ')', pct: 0, failed: true });
+        this.asrFailed = 'No subtitles: ' + (e.message || String(e)).slice(0, 140);
+        this.onAsr && this.onAsr({ stage: this.asrFailed, pct: 0, failed: true });
       }
       return false;
     }
