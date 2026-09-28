@@ -111,7 +111,9 @@ function home() {
       step('4', 'Judged', 'Five judges rate rhythm, duration & coverage. Download the dub.')),
     h('footer', { class: 'foot' },
       h('button', { class: 'btn ghost', onclick: settings }, '⚙ Settings'),
-      h('span', { class: 'fine' }, 'Everything runs in your browser. Party videos are deleted when the room closes.')));
+      h('span', { class: 'fine' }, 'Everything runs in your browser. Party videos are deleted when the room closes.'),
+      h('span', { class: 'fine build' })));
+  fetch((window.CV_SERVER || '') + '/health').then(r => r.json()).then(d => { const b = $('.build'); if (b) b.textContent = 'build ' + d.version; }).catch(() => {});
   show(el, 'is-home');
   if (joinCode) (me.name ? code : name).focus();
 }

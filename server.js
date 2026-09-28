@@ -14,6 +14,8 @@ const ROOM_IDLE_MS = 15 * 60 * 1000;   // nobody connected for this long -> room
 const ROOM_MAX_MS = 6 * 60 * 60 * 1000;
 const STORE = process.env.STORE_DIR || path.join(os.tmpdir(), 'voicer');
 const PUBLIC = path.join(__dirname, 'public');
+// Render sets RENDER_GIT_COMMIT; handy for telling which build a browser is on
+const VERSION = (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7);
 
 const T = {
   loading: 25000,
@@ -536,10 +538,18 @@ function serveStatic(req, res, pathname) {
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
     const ext = path.extname(file);
+    // our own files always revalidate, so a deploy shows up on the next reload
+    const etag = `"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
+    const cache = longCache ? 'public, max-age=604800' : 'no-cache';
+    if (!longCache && req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': cache });
+      return res.end();
+    }
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Content-Length': st.size,
-      'Cache-Control': ext === '.html' ? 'no-cache' : longCache ? 'public, max-age=604800' : 'public, max-age=300',
+      'Cache-Control': cache,
+      ETag: etag,
     });
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
@@ -550,7 +560,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const parts = url.pathname.split('/').filter(Boolean);
   try {
-    if (url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size, uptime: process.uptime() | 0 });
+    if (url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size, uptime: process.uptime() | 0, version: VERSION });
     if (parts[0] === 'api' && req.method === 'POST') {
       const room = rooms.get((parts[2] || '').toUpperCase());
       if (!room) return json(res, 404, { error: 'Room not found.' });
